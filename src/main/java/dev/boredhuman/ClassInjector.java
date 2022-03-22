@@ -6,7 +6,6 @@ import com.sun.jna.Memory;
 import com.sun.jna.Native;
 import com.sun.jna.NativeLibrary;
 import com.sun.jna.Pointer;
-import com.sun.jna.platform.win32.Advapi32;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.Psapi;
 import com.sun.jna.platform.win32.WinDef;
@@ -19,10 +18,6 @@ public class ClassInjector {
 
 	static final int WOW64_CONTEXT_ALL = 0x1003F;
 
-	public static void main(String[] args) {
-		new ClassInjector();
-	}
-
 	static NativeLibrary K32 = ((Library.Handler) Proxy.getInvocationHandler(Kernel32.INSTANCE)).getNativeLibrary();
 	static Function getThreadContext = ClassInjector.K32.getFunction("GetThreadContext");
 	static Function debugActiveProcess = ClassInjector.K32.getFunction("DebugActiveProcess");
@@ -34,12 +29,8 @@ public class ClassInjector {
 	static Function getProcAddress = ClassInjector.K32.getFunction("GetProcAddress");
 	static Function suspendThread = ClassInjector.K32.getFunction("SuspendThread");
 
-	public ClassInjector() {
-		if (this.getDebugPrivileges()) {
-			int processID = WindowUtils.getProcessIDByWindowTitle("recaf");
-			if (processID == -1) {
-				return;
-			}
+	public ClassInjector(Class<?> classToLoad, int processID) {
+		if (WindowUtils.getDebugPrivileges()) {
 			WinNT.HANDLE handle = Kernel32.INSTANCE.OpenProcess(WinNT.PROCESS_ALL_ACCESS, false, processID);
 
 			WinDef.HMODULE[] modules = new WinDef.HMODULE[1024];
@@ -83,45 +74,13 @@ public class ClassInjector {
 				Pointer JVMArrayPointerPointer = memoryHelper.alloc(8);
 				// basically the stack position after just before the thread calls the target function
 
-				JNIClassInjectorCallback jniClassInjectorCallback = new JNIClassInjectorCallback(memoryHelper, getCreatedJavaVMsAddress, JVMArrayPointerPointer, RemoteJarLoader.class);
+				JNIClassInjectorCallback jniClassInjectorCallback = new JNIClassInjectorCallback(memoryHelper, getCreatedJavaVMsAddress, JVMArrayPointerPointer, classToLoad);
 				this.callRemoteThread(handle, processID, Pointer.createConstant(getCreatedJavaVMsAddress), JVMArrayPointerPointer, jniClassInjectorCallback);
 				break;
 			}
 
 			Kernel32.INSTANCE.CloseHandle(handle);
 		}
-	}
-
-	public boolean getDebugPrivileges() {
-		WinNT.HANDLE currentProcess = Kernel32.INSTANCE.GetCurrentProcess();
-		WinNT.HANDLEByReference hToken = new WinNT.HANDLEByReference();
-
-		if (!Advapi32.INSTANCE.OpenProcessToken(currentProcess, WinNT.TOKEN_ADJUST_PRIVILEGES, hToken)) {
-			ClassInjector.err("Failed to open process token");
-			return false;
-		}
-		WinNT.LUID luid = new WinNT.LUID();
-
-		if (!Advapi32.INSTANCE.LookupPrivilegeValue(null, WinNT.SE_DEBUG_NAME, luid)) {
-			ClassInjector.err("Failed to get luid for SeDebugPrivilege");
-			return false;
-		}
-
-		WinNT.TOKEN_PRIVILEGES tokenPrivileges = new WinNT.TOKEN_PRIVILEGES(1);
-
-		WinNT.LUID_AND_ATTRIBUTES luidAttributes = new WinNT.LUID_AND_ATTRIBUTES(luid, new WinDef.DWORD(WinNT.SE_PRIVILEGE_ENABLED));
-
-		tokenPrivileges.Privileges[0] = luidAttributes;
-
-		if (!Advapi32.INSTANCE.AdjustTokenPrivileges(hToken.getValue(), false, tokenPrivileges, tokenPrivileges.size(), null, null)) {
-			ClassInjector.err("Could not adjust process privileges");
-
-			return false;
-		}
-
-		Kernel32.INSTANCE.CloseHandle(hToken.getValue());
-
-		return Kernel32.INSTANCE.GetLastError() == 0;
 	}
 
 	public void callRemoteThread(WinNT.HANDLE processHandle, int processID, Pointer methodAddress, Pointer rcx, CallRemoteMethodCallBack callback) {
